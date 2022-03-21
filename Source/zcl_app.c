@@ -59,7 +59,8 @@ byte zclApp_TaskID;
 
 static uint8 temp_sensor_type = EBME280; //ENOTFOUND
 static bool abc_state = true;
-uint16 ppm = 0;
+static bool sensor_init = false;
+
 /*********************************************************************
  * GLOBAL FUNCTIONS
  */
@@ -81,17 +82,16 @@ static void zclApp_Report(void);
 static void zclApp_BasicResetCB(void);
 static void zclApp_RestoreAttributesFromNV(void);
 static void zclApp_SaveAttributesToNV(void);
-static void zclApp_ReadCO2Sensor(void);
+static void zclApp_ReadSensors(void);
 static void zclApp_ReadBMEDS18B20(void);
-static void zclApp_TreatABC(void);
+static void zclApp_PerformABC(void);
 static void zclApp_HandleKeys(byte portAndAction, byte keyCode);
 static uint8 zclApp_RequestBME280(struct bme280_dev *dev);
 static uint8 zclApp_ReadBME280(struct bme280_dev *dev);
 static void zclApp_InitCO2Uart(void);
 static ZStatus_t zclApp_ReadWriteAuthCB(afAddrType_t *srcAddr, zclAttrRec_t *pAttr, uint8 oper);
-static void zclApp_SetupABC(bool force);
 static void UartProcessData (uint8 port, uint8 event);
-static void ProcessUartResults(uint8 *);
+static void ProcessUartResults(uint8 *, uint8 count);
 
 
 /*********************************************************************
@@ -199,16 +199,12 @@ uint16 zclApp_event_loop(uint8 task_id, uint16 events) {
         zclApp_SaveAttributesToNV();
         return (events ^ APP_SAVE_ATTRS_EVT);
     }
-    if (events & APP_READ_CO2SENSOR_EVT) {
-        LREPMaster("APP_READ_CO2SENSOR_EVT\r\n");
-        zclApp_ReadCO2Sensor();
-        return (events ^ APP_READ_CO2SENSOR_EVT);
+    if (events & APP_READ_SENSORS_EVT) {
+        LREPMaster("APP_READ_SENSORS_EVT\r\n");
+        zclApp_ReadSensors();
+        return (events ^ APP_READ_SENSORS_EVT);
     }
-    if (events & APP_OTH_SENSORS_EVT) {
-        LREPMaster("APP_OTH_SENSORS_EVT\r\n");
-        zclApp_ReadBMEDS18B20();
-        return (events ^ APP_OTH_SENSORS_EVT);
-    }
+        
     return 0;
 }
 
@@ -226,8 +222,8 @@ static void zclApp_LedFeedback(void) {
     }
 }
 
-static void zclApp_TreatABC(void) {
-    LREPMaster("TreatABC \r\n");
+static void zclApp_PerformABC(void) {
+    LREPMaster("PerformABC \r\n");
     if(abc_state != zclApp_Config.EnableABC){
         LREPMaster("Setup ABC \r\n");
         (*air_dev->SetABC)(zclApp_Config.EnableABC);
@@ -255,7 +251,7 @@ static void zclApp_ReadBMEDS18B20(void) {
                 LREP("ReadDS18B20 t=%d offset=\r\n", zclApp_Sensors.Temperature, zclApp_Config.TemperatureOffset);
             }
     
-        } 
+        }
     if (temp_sensor_type == EBME280) {
             bdb_RepChangedAttrValue(zclApp_FirstEP.EndPoint, TEMP, ATTRID_MS_TEMPERATURE_MEASURED_VALUE);
             bdb_RepChangedAttrValue(zclApp_FirstEP.EndPoint, PRESSURE, ATTRID_MS_PRESSURE_MEASUREMENT_MEASURED_VALUE);
@@ -264,14 +260,15 @@ static void zclApp_ReadBMEDS18B20(void) {
     if (temp_sensor_type == EDS18B20) {
             bdb_RepChangedAttrValue(zclApp_FirstEP.EndPoint, TEMP, ATTRID_MS_TEMPERATURE_MEASURED_VALUE);
         }
-    osal_pwrmgr_task_state(zclApp_TaskID, PWRMGR_CONSERVE);
+    if(sensor_init)
+      osal_pwrmgr_task_state(zclApp_TaskID, PWRMGR_CONSERVE);
 }
 
 void UartProcessData (uint8 port, uint8 event)
 {
   uint8 ch,count=0;
-  uint8 buf[20];
-   
+  uint8 buf[15];
+  LREPMaster("UART Started \r\n"); 
   if (event &(HAL_UART_RX_FULL|HAL_UART_RX_ABOUT_FULL|HAL_UART_RX_TIMEOUT))
     {
       LREPMaster("UART Recieved \r\n");
@@ -279,50 +276,68 @@ void UartProcessData (uint8 port, uint8 event)
         {
           HalUARTRead (port, &ch, 1);
           buf[count++]=ch; //copy the received byte
+          //printf("%x ", ch);
         }
-      //for(uint8 i=0;i<len;i++)
-      //LREP(" %x ", buf[i] & 0xff);
-      ProcessUartResults(buf);
+      //for(int i=0;i<count;i++){
+        //LREP(" %x ", buf[i] & 0xff);
+       // printf("%x \r\n", buf[i]);
+      //}
+      //printf("count=%d \r\n", count);
+      ProcessUartResults(buf, count);
+      
      }
 }
 
-static void ProcessUartResults(uint8 *data)
+static void ProcessUartResults(uint8* data, uint8 count)
 {
-  LREPMaster("Process Uart Results \r\n");
   
+  uint16 ppm = 0;
+  
+  LREPMaster("Process Uart Results \r\n");
   ppm = (*air_dev->Read)(data);
   
   if (ppm == AIR_QUALITY_INVALID_RESPONSE) {
-      air_dev = (air_dev == &sense_air_dev) ? &MHZ19_dev : &sense_air_dev;
       LREPMaster("Sensor type UNKNOWN continue detect\r\n");
       }
+  else if (ppm == AIR_QUALITY_ABC_RESPONSE){
+      LREPMaster("ABC Response\r\n");
+      }
    else {
-      LREP("SenseAir Received CO2=%d ppm\r\n", ppm);
+      sensor_init = true; 
+      //LREP("PPM Received CO2=%d ppm\r\n", ppm);
       zclApp_Sensors.CO2_PPM = ppm;
       zclApp_Sensors.CO2 = (double)ppm / 1000000.0;
-      bdb_RepChangedAttrValue(zclApp_FirstEP.EndPoint, ZCL_CO2, ATTRID_CO2_MEASURED_VALUE);
+      //printf ("ppm: %d \r\n", zclApp_Sensors.CO2_PPM);
+      //printf ("ppm_f: %4.10f \r\n", zclApp_Sensors.CO2);
+      //LREPMaster("Report PPM\r\n");
+      bdb_RepChangedAttrValue(zclApp_FirstEP.EndPoint, ZCL_CO2, ATTRID_CO2_MEASURED_VALUE);  
       
+      zclApp_LedFeedback();
+      zclApp_PerformABC();
       }
-        
-        zclApp_LedFeedback();
-    zclApp_TreatABC();
+    
+   zclApp_ReadBMEDS18B20();
+   
 }
 
 
-static void zclApp_ReadCO2Sensor(void) {
+static void zclApp_ReadSensors(void) {
     
-    osal_stop_timerEx(zclApp_TaskID, APP_READ_CO2SENSOR_EVT);
-    if (zclApp_Config.LedFeedback) {
+   if (zclApp_Config.LedFeedback) {
         HalLedSet(HAL_LED_1, HAL_LED_MODE_BLINK);
     }
-     osal_pwrmgr_task_state(zclApp_TaskID, PWRMGR_HOLD);
+    if(!sensor_init)
+      air_dev = (air_dev == &sense_air_dev) ? &MHZ19_dev : &sense_air_dev;
     
     (*air_dev->RequestMeasure)();
-    osal_start_timerEx(zclApp_TaskID, APP_OTH_SENSORS_EVT, APP_EVT_DELAY);
+
 }
 
 static void zclApp_Report(void) {
-     osal_start_timerEx(zclApp_TaskID, APP_READ_CO2SENSOR_EVT, APP_EVT_DELAY);
+     
+     osal_pwrmgr_task_state(zclApp_TaskID, PWRMGR_HOLD);  
+     
+     osal_start_timerEx(zclApp_TaskID, APP_READ_SENSORS_EVT, APP_EVT_DELAY);
      }
 
 static void zclApp_BasicResetCB(void) {
@@ -333,9 +348,6 @@ static void zclApp_BasicResetCB(void) {
 
 static ZStatus_t zclApp_ReadWriteAuthCB(afAddrType_t *srcAddr, zclAttrRec_t *pAttr, uint8 oper) {
     LREPMaster("AUTH CB called\r\n");
-    //osal_pwrmgr_task_state(zclApp_TaskID, PWRMGR_HOLD);
-    //zclApp_SetupABC(true);
-    //osal_pwrmgr_task_state(zclApp_TaskID, PWRMGR_CONSERVE);
     osal_start_timerEx(zclApp_TaskID, APP_SAVE_ATTRS_EVT, 2000);
     return ZSuccess;
 }

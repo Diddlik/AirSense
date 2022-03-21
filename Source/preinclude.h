@@ -42,10 +42,8 @@
 #if defined(HAL_BOARD_TARGET)
     #define HAL_KEY_P2_INPUT_PINS BV(0)
     #define CO2_UART_PORT HAL_UART_PORT_0
-    #define DO_DEBUG_UART
-    #define HAL_UART_DMA 2
-    #define HAL_UART_ISR 1
-    #define INT_HEAP_LEN (2256 - 0xE - 0x14)  //
+    //#define DO_DEBUG_UART
+    #define INT_HEAP_LEN (2256 - 0xE) // - 0x14)  //
 #elif defined(HAL_BOARD_CHDTECH_DEV)
     #define HAL_UART_DMA 1
     #define HAL_UART_ISR 2
@@ -57,10 +55,15 @@
 #define FACTORY_RESET_HOLD_TIME_LONG 5000
 
 
-#ifdef DO_DEBUG_UART
+#if defined(DO_DEBUG_UART) && defined(HAL_BOARD_TARGET)
     #define DEBUG_UART_PORT HAL_UART_PORT_1
     #define HAL_UART TRUE
+    #define HAL_UART_DMA 2
+    #define HAL_UART_ISR 1
     //#define INT_HEAP_LEN (2256 - 0xE - 0x28)
+#else
+    #define HAL_UART_DMA 1
+    #define HAL_UART_ISR 0
 #endif
 
 // #define INT_HEAP_LEN (2685 - 0x4B - 0xBB-0x50-0xae)
