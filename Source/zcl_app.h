@@ -15,14 +15,11 @@ extern "C" {
  * CONSTANTS
  */
 #define APP_REPORT_DELAY ((uint32)60 * (uint32)1000) // 1 minute
-#define APP_EVT_DELAY (uint32)200 
-
 
 // Application Events
 #define APP_REPORT_EVT 0x0001
 #define APP_SAVE_ATTRS_EVT 0x0002
 #define APP_READ_SENSORS_EVT 0x0004
-
 /*********************************************************************
  * MACROS
  */
